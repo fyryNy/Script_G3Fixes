@@ -2,6 +2,10 @@
 This script fixes few things in game and also adds new features
 
 
+# Compiled binaries
+On my google drive: [HERE](https://drive.google.com/drive/folders/1vQGQMim-WsOKXqo1wfm7i2uZS3OMC_MU)
+
+# Details
 #### New, more random percentage chance for applying status effects like Freeze or Burn on hit
 - Spells:  
   Area spells or charged spells have 100% to apply effect  
@@ -26,6 +30,3 @@ This script fixes few things in game and also adds new features
 Extract Script_G3Fixes.zip inside main directory of Gothic 3 (where Gothic3.exe is placed).  
 
 If you want Cure Disease potion and Antidote to work without that stupid spell animation, extract also Script_G3Fixes_Example_Templates.zip inside main directory.
-
-# Download
-On my google drive: [HERE](https://drive.google.com/drive/folders/1vQGQMim-WsOKXqo1wfm7i2uZS3OMC_MU)
