@@ -2,10 +2,10 @@
 This script fixes few things in game and also adds new features
 
 
-# Compiled binaries
-On my google drive: [HERE](https://drive.google.com/drive/folders/1vQGQMim-WsOKXqo1wfm7i2uZS3OMC_MU)
+# Compiled binaries  
+[<img src="https://img.shields.io/badge/here-grey?logo=GoogleDrive&logoColor=4285F4&style=for-the-badge">](https://drive.google.com/drive/folders/1vQGQMim-WsOKXqo1wfm7i2uZS3OMC_MU)
 
-# Details
+# Details  
 #### New, more random percentage chance for applying status effects like Freeze or Burn on hit
 - Spells:  
   Area spells or charged spells have 100% to apply effect  
