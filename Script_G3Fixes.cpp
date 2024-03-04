@@ -1,8 +1,17 @@
 #include "Script_G3Fixes.h"
 
-GEBool CompanionAutoDefend = GETrue;
+GEBool CompanionAutoDefend = GEFalse;
+GEBool CompanionAutoDefendHotkeyPressed = GEFalse;
+eCInpShared::eEKeyboardStateOffset CompanionAutoDefendHotkey = eCInpShared::eEKeyboardStateOffset::eEKeyboardStateOffset_APOSTROPHE;
 GEBool TeleportCompanionTooFarAway = GETrue;
 GEBool QuickCastChance = GETrue;
+GEBool BlockMonsterRespawn = GEFalse;
+GEBool RemoveWaterfallSoundEffects = GEFalse;
+
+static CFFGFCBitmap CompanionIcon;
+GEI32 CompanionIconSize = 16;
+GEFloat CompanionIconPosTopX = 98.5;
+GEFloat CompanionIconPosTopY = 2.5;
 
 gSScriptInit & GetScriptInit()
 {
@@ -10,11 +19,37 @@ gSScriptInit & GetScriptInit()
 	return s_ScriptInit;
 }
 
-static mCFunctionHook Hook_CanFreeze;
-GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 a_iArgs)
+static mCCallHook Hook_AfterApplicationProcess;
+void GE_STDCALL AfterApplicationProcess()
 {
-	UNREFERENCED_PARAMETER(a_iArgs);
-	INIT_SCRIPT_EXT(Victim, Damager)
+	Hook_AfterApplicationProcess.Disable();
+
+	if (GetScriptAdmin().IsScriptDLLLoaded("Script_ItemUseFuncEnabler.dll"))
+	{
+		GE_FATAL_ERROR_EX("Script_G3Fixes", "Obsolete script \"Script_ItemUseFuncEnabler\" detected.\nPlease remove file \"Script_ItemUseFuncEnabler.dll\" from \"Gothic 3/scripts\" directory.");
+	}
+}
+
+static mCFunctionHook Hook_Respawn;
+GEInt GE_STDCALL Respawn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 a_iArgs)
+{
+	INIT_SCRIPT();
+	auto result = Hook_Respawn.GetOriginalFunction(&Respawn)(SCRIPT_PARAMS);
+
+	if (result != 0 && BlockMonsterRespawn)
+	{
+		bCString msg = "Blocking respawn of " + SelfEntity.GetName();
+		spy.Send(msg.GetText());
+		SelfEntity.Kill();
+	}
+
+	return result;
+}
+
+static mCFunctionHook Hook_CanFreeze;
+GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 Damage)
+{
+	INIT_SCRIPT_EXT(Victim, Damager);
 
 	Entity Player = Entity::GetPlayer();
 	gESpecies VictimSpecies = Victim.NPC.Species;
@@ -30,6 +65,13 @@ GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEnti
 		return 0;
 	default:
 		break;
+	}
+
+	gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
+	auto VictimHP = ScriptAdmin.CallScriptFromScript("GetHitPoints", &Victim, &None);
+	if (VictimHP - static_cast<GEInt>(Damage) <= 0)
+	{
+		return GEFalse;
 	}
 
 	GEInt Chance = 0;
@@ -109,10 +151,10 @@ GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEnti
 }
 
 static mCFunctionHook Hook_CanBurn;
-GEInt GE_STDCALL CanBurn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 a_iArgs)
+GEInt GE_STDCALL CanBurn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 Damage)
 {
-	UNREFERENCED_PARAMETER(a_iArgs);
-	INIT_SCRIPT_EXT(Victim, Damager)
+	UNREFERENCED_PARAMETER(Damage);
+	INIT_SCRIPT_EXT(Victim, Damager);
 
 	Entity Player = Entity::GetPlayer();
 	gESpecies VictimSpecies = Victim.NPC.Species;
@@ -128,6 +170,13 @@ GEInt GE_STDCALL CanBurn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity
 		return 0;
 	default:
 		break;
+	}
+
+	gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
+	auto VictimHP = ScriptAdmin.CallScriptFromScript("GetHitPoints", &Victim, &None);
+	if (VictimHP - static_cast<GEInt>(Damage) <= 0)
+	{
+		return GEFalse;
 	}
 
 	GEInt Chance = 0;
@@ -615,9 +664,15 @@ void LoadSettings()
 	eCConfigFile config = eCConfigFile();
 	if (config.ReadFile(bCString("G3Fixes.ini")))
 	{
-		CompanionAutoDefend = config.GetBool(bCString("G3Fixes"), bCString("CompanionAutoDefend"), CompanionAutoDefend);
-		TeleportCompanionTooFarAway = config.GetBool(bCString("G3Fixes"), bCString("TeleportCompanionTooFarAway"), TeleportCompanionTooFarAway);
-		QuickCastChance = config.GetBool(bCString("G3Fixes"), bCString("QuickCastChance"), QuickCastChance);
+		CompanionAutoDefendHotkey = eCApplication::GetInstance().GetKeyboard().GetKeyByName(config.GetString(bCString("Main"), bCString("CompanionAutoDefendHotkey"), bCString("APOSTROPHE")));
+		TeleportCompanionTooFarAway = config.GetBool(bCString("Main"), bCString("TeleportCompanionTooFarAway"), TeleportCompanionTooFarAway);
+		QuickCastChance = config.GetBool(bCString("Main"), bCString("QuickCastChance"), QuickCastChance);
+		BlockMonsterRespawn = config.GetBool(bCString("Main"), bCString("BlockMonsterRespawn"), BlockMonsterRespawn);
+		RemoveWaterfallSoundEffects = config.GetBool(bCString("Optional"), bCString("RemoveWaterfallSoundEffects"), RemoveWaterfallSoundEffects);
+
+		CompanionIconSize = config.GetI32(bCString("CompanionIcon"), bCString("CompanionIconSize"), CompanionIconSize);
+		CompanionIconPosTopX = config.GetFloat(bCString("CompanionIcon"), bCString("CompanionIconPosTopX"), CompanionIconPosTopX);
+		CompanionIconPosTopY = config.GetFloat(bCString("CompanionIcon"), bCString("CompanionIconPosTopY"), CompanionIconPosTopY);
 	}
 	else
 	{
@@ -625,16 +680,151 @@ void LoadSettings()
 	}
 }
 
+void RemoveWaterfallSounds()
+{
+	eCSceneAdmin * pSceneAdmin = FindModule<eCSceneAdmin>();
+	if (!pSceneAdmin)
+	{
+		return;
+	}
+
+	auto TemplateIterator = pSceneAdmin->m_mapTemplateEntities.Begin();
+
+	while (TemplateIterator != pSceneAdmin->m_mapTemplateEntities.End())
+	{
+		auto _Template = TemplateIterator.GetNode()->m_Element;
+		TemplateIterator++;
+
+		if (!_Template)
+		{
+			continue;
+		}
+
+		auto templatename = _Template->GetName();
+		templatename.ToLower();
+		if (!templatename.Contains("waterfall"))
+		{
+			continue;
+		}
+
+		if (_Template->HasPropertySet("eCAudioEmitter_PS"))
+		{
+			bCString msg = "Removing audio emitter from: " + _Template->GetName();
+			spy.Send(msg.GetText());
+			_Template->RemovePropertySet("eCAudioEmitter_PS");
+		}
+	}
+}
+
+void RenderIcon(CFFGFCWnd* DesktopWindow)
+{
+	if (!gCSession::GetSession().IsValid() || gCSession::GetSession().IsPaused() || !gCSession::GetSession().GetGUIManager())
+	{
+		return;
+	}
+
+	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || gCInfoManager_PS::GetInstance()->IsRunning)
+	{
+		return;
+	}
+
+	if (eCApplication::GetInstance().GetConsole().IsActive())
+	{
+		return;
+	}
+
+	if (Entity::GetPlayer().Party.GetMembers(GEFalse).GetCount() < 1)
+	{
+		return;
+	}
+	
+	if (CompanionAutoDefend)
+	{
+		CompanionIcon.Create("G3Fixes_Companion_Active.png");
+	}
+	else
+	{
+		CompanionIcon.Create("G3Fixes_Companion_Passive.png");
+	}
+
+	auto DeviceContext = DesktopWindow->GetDC();
+	bCRect ClientRect;
+	DesktopWindow->GetClientRect(ClientRect);
+
+	GEI32 TopX = (ClientRect.GetWidth() * CompanionIconPosTopX) / 100;
+	GEI32 TopY = (ClientRect.GetHeight() * CompanionIconPosTopY) / 100;
+
+	bCRect DrawBox(TopX, TopY, TopX + CompanionIconSize, TopY + CompanionIconSize);
+	DeviceContext->DrawBitmap(&CompanionIcon, &DrawBox, 0, 0.0f);
+}
+
+static mCFunctionHook Hook__CFFGFCWnd_OnPaint;
+void CFFGFCWnd_OnPaint(void) {
+	CFFGFCWnd * This = Hook__CFFGFCWnd_OnPaint.GetSelf<CFFGFCWnd *>();
+
+	if (This->GetDlgCtrlID() == 4294967295)
+	{
+		RenderIcon(This->GetDesktopWindow());
+	}
+
+	Hook__CFFGFCWnd_OnPaint.GetOriginalFunction(&CFFGFCWnd_OnPaint)();
+}
+
+bTPropertyObject<mCG3Fixes, eCEngineComponentBase> mCG3Fixes::ms_PropertyObjectInstance_mCG3Fixes(GETrue);
+
+void mCG3Fixes::Process(void)
+{
+	if (!gCSession::GetSession().IsValid() || gCSession::GetSession().IsPaused() || !gCSession::GetSession().GetGUIManager())
+	{
+		return;
+	}
+
+	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || gCInfoManager_PS::GetInstance()->IsRunning)
+	{
+		return;
+	}
+
+	if (eCApplication::GetInstance().GetConsole().IsActive())
+	{
+		return;
+	}
+
+	auto List = Entity::GetPlayer().Party.GetMembers(GEFalse);
+	if (List.GetCount() < 1)
+	{
+		return;
+	}
+
+	if (eCApplication::GetInstance().GetKeyboard().KeyPressed(CompanionAutoDefendHotkey))
+	{
+		if (!CompanionAutoDefendHotkeyPressed)
+		{
+			CompanionAutoDefend = !CompanionAutoDefend;
+			CompanionAutoDefendHotkeyPressed = GETrue;
+		}
+	}
+	else
+	{
+		CompanionAutoDefendHotkeyPressed = GEFalse;
+	}
+}
+
+mCG3Fixes::~mCG3Fixes(void)
+{
+	CompanionIcon.Destroy();
+}
+
+mCG3Fixes::mCG3Fixes(void)
+{
+	eCModuleAdmin::GetInstance().RegisterModule(*this);
+}
+
 extern "C" __declspec(dllexport)
 gSScriptInit const * GE_STDCALL ScriptInit(void)
 {
 	GetScriptAdmin().LoadScriptDLL("Script_Game.dll");
 
-	GetScriptAdmin().LoadScriptDLL("Script_ItemUseFuncEnabler.dll");
-	if (GetScriptAdmin().IsScriptDLLLoaded("Script_ItemUseFuncEnabler.dll"))
-	{
-		GE_FATAL_ERROR_EX("Script_G3Fixes", "Obsolete script \"Script_ItemUseFuncEnabler\" detected.\nPlease remove file \"Script_ItemUseFuncEnabler.dll\" from \"Gothic 3/scripts\" directory.");
-	}
+	static bCAccessorCreator G3Fixes(bTClassName<mCG3Fixes>::GetUnmangled());
 
 	Hook__AI_UseInventoryItem.Hook(GetScriptAdminExt().GetScriptAIFunction("_AI_UseInventoryItem")->m_funcScriptAIFunction, &_AI_UseInventoryItem, mCBaseHook::mEHookType_OnlyStack);
 
@@ -644,13 +834,26 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 
 	Hook_CanFreeze.Hook(GetScriptAdminExt().GetScript("CanFreeze")->m_funcScript, &CanFreeze);
 
+	Hook_Respawn.Hook(GetScriptAdminExt().GetScript("Respawn")->m_funcScript, &Respawn);
+
 	Hook_ZS_ObserveSuspect.Hook(GetScriptAdminExt().GetScriptAIState("ZS_ObserveSuspect")->m_funcScriptAIState, &ZS_ObserveSuspect, mCBaseHook::mEHookType_OnlyStack);
 
 	Hook_OnFollowPlayer.Hook(GetScriptAdminExt().GetScriptAICallback("OnFollowPlayer")->m_funcScriptAICallback, &OnFollowPlayer, mCBaseHook::mEHookType_OnlyStack);
 
 	HookOnExecute.Hook(PROC_Engine("?OnExecute@eCConsole@@MAE_NABVbCString@@AAV2@@Z"), &OnExecuteHook, mCFunctionHook::mEHookType_ThisCall);
 
+	Hook__CFFGFCWnd_OnPaint.Hook(PROC_GFC("?OnPaint@CFFGFCWnd@@UAEXXZ"), &CFFGFCWnd_OnPaint, mCBaseHook::mEHookType_ThisCall);
+
+	Hook_AfterApplicationProcess
+		.Prepare(RVA_Engine(0x1677C), &AfterApplicationProcess)
+		.InsertCall().Hook();
+
 	LoadSettings();
+
+	if (RemoveWaterfallSoundEffects)
+	{
+		RemoveWaterfallSounds();
+	}
 
 	spy.Send("G3Fixes - Plugin loaded");
 
