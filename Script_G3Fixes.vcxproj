@@ -76,6 +76,7 @@
     <ClInclude Include="..\..\Shared\util\Memory.h" />
     <ClInclude Include="..\..\Shared\util\ScriptUtil.h" />
     <ClInclude Include="..\..\Shared\util\Util.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="Script_G3Fixes.h" />
   </ItemGroup>
   <ItemGroup>
@@ -109,6 +110,9 @@
     <ProjectReference Include="..\..\Shared\Asmjit\Asmjit.vcxproj">
       <Project>{32a1be07-45f2-4b54-9cf0-992dffc8d06a}</Project>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Script_G3Fixes.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

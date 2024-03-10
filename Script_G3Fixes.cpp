@@ -13,14 +13,52 @@ GEI32 CompanionIconSize = 16;
 GEFloat CompanionIconPosTopX = 98.5;
 GEFloat CompanionIconPosTopY = 2.5;
 
+GEBool HerdUnityActive = GEFalse;
+static GEBool HerdUnity = GEFalse;
+static Entity HerdLeader = None;
+
+
 gSScriptInit & GetScriptInit()
 {
 	static gSScriptInit s_ScriptInit;
 	return s_ScriptInit;
 }
 
+void TryFixMist(void)
+{
+	auto Player = Entity::GetPlayer();
+
+	if (!Player.NPC.HasStatusEffects(gEStatusEffect::gEStatusEffect_IsImNebel))
+	{
+		return;
+	}
+
+	eCSceneAdmin * pSceneAdmin = FindModule<eCSceneAdmin>();
+	if (!pSceneAdmin)
+	{
+		return;
+	}
+
+	auto MistGameEntity = pSceneAdmin->GetEntityByName("Smn_Mist");
+	if (MistGameEntity)
+	{
+		spy.Send(bCString::GetFormattedString("%s - Entity Smn_Mist found, skipping.", PLUGIN_NAME).GetText());
+		return;
+	}
+
+	spy.Send(bCString::GetFormattedString("%s - Entity Smn_Mist not found, trying to fix hero's statuseffect.", PLUGIN_NAME).GetText());
+	Player.NPC.EnableStatusEffects(gEStatusEffect::gEStatusEffect_IsImNebel, GEFalse);
+}
+
+static mCFunctionHook Hook_Entity_EndTransform;
+void Entity_EndTransform(void)
+{
+	Hook_Entity_EndTransform.GetOriginalFunction(&Entity_EndTransform)();
+	TryFixMist();
+}
+
 static mCCallHook Hook_AfterApplicationProcess;
-void GE_STDCALL AfterApplicationProcess()
+void GE_STDCALL AfterApplicationProcess(void)
 {
 	Hook_AfterApplicationProcess.Disable();
 
@@ -28,6 +66,100 @@ void GE_STDCALL AfterApplicationProcess()
 	{
 		GE_FATAL_ERROR_EX("Script_G3Fixes", "Obsolete script \"Script_ItemUseFuncEnabler\" detected.\nPlease remove file \"Script_ItemUseFuncEnabler.dll\" from \"Gothic 3/scripts\" directory.");
 	}
+}
+
+static mCFunctionHook Hook_AssessTarget;
+GEInt GE_STDCALL AssessTarget(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 a_iArgs)
+{
+	INIT_SCRIPT();
+
+	auto Player = Entity::GetPlayer();
+
+	auto result = Hook_AssessTarget.GetOriginalFunction(&AssessTarget)(SCRIPT_PARAMS);
+
+	gEAttackReason AttackReason = static_cast<gEAttackReason>(a_iArgs);
+
+	if (HerdLeader == None)
+	{
+		return result;
+	}
+
+	if (AttackReason != gEAttackReason::gEAttackReason_Angry && !HerdUnity && HerdLeader != SelfEntity/* && OtherEntity != Player*/)
+	{
+		return result;
+	}
+
+	bTObjArray<Entity> Ents = Entity::GetEntities();
+	Entity::SortEntityListByDistanceTo(Ents, SelfEntity);
+
+	for (GEInt X = 0; X < Ents.GetCount(); X++)
+	{
+		Entity Ent = Ents.GetAt(X);
+
+		if (Ent == Player)
+		{
+			continue;
+		}
+
+		if (Ent == SelfEntity)
+		{
+			continue;
+		}
+
+		if (SelfEntity.GetDistanceTo(Ent) > 2500.0f)
+		{
+			continue;
+		}
+
+		if (Ent.IsDead() || Ent.IsDown())
+		{
+			continue;
+		}
+
+		if (Ent.Party.GetPartyLeader() == Player || Ent.Party.PartyMemberType == gEPartyMemberType::gEPartyMemberType_Summoned)
+		{
+			continue;
+		}
+
+		if (Ent.NPC.Species != SelfEntity.NPC.Species)
+		{
+			continue;
+		}
+
+		if (Ent.NPC.CombatState == 1)
+		{
+			continue;
+		}
+
+		if (Ent.Routine.GetCurrentTask().CompareFast("ZS_Threaten"))
+		{
+			continue;
+		}
+
+		gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
+		ScriptAdmin.CallScriptFromScript("AssessTarget", &Ent, &OtherEntity, gEAttackReason::gEAttackReason_Angry);
+	}
+
+	return result;
+}
+
+static mCFunctionHook Hook_ZS_Threaten_Loop;
+GEInt GE_STDCALL ZS_Threaten_Loop(GEInt a0, gCScriptProcessingUnit * a_pSPU)
+{
+	if (HerdUnityActive)
+	{
+		HerdLeader = a_pSPU->GetSelfEntity();
+		HerdUnity = GETrue;
+
+		GEInt result = Hook_ZS_Threaten_Loop.GetOriginalFunction(&ZS_Threaten_Loop)(a0, a_pSPU);
+
+		HerdLeader = nullptr;
+		HerdUnity = GEFalse;
+
+		return result;
+	}
+
+	return Hook_ZS_Threaten_Loop.GetOriginalFunction(&ZS_Threaten_Loop)(a0, a_pSPU);
 }
 
 static mCFunctionHook Hook_Respawn;
@@ -38,8 +170,7 @@ GEInt GE_STDCALL Respawn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity
 
 	if (result != 0 && BlockMonsterRespawn)
 	{
-		bCString msg = "Blocking respawn of " + SelfEntity.GetName();
-		spy.Send(msg.GetText());
+		spy.Send(bCString::GetFormattedString("%s - Blocking respawn of %s", PLUGIN_NAME, SelfEntity.GetName()).GetText());
 		SelfEntity.Kill();
 	}
 
@@ -466,86 +597,164 @@ GEInt GE_STDCALL ZS_ObserveSuspect(GEInt a0, gCScriptProcessingUnit * a_pSPU)
 	return result;
 }
 
+static mCFunctionHook Hook_OnGuidePlayer;
+GEBool GE_STDCALL OnGuidePlayer(gCScriptProcessingUnit * a_pSPU)
+{
+	GEBool result = Hook_OnGuidePlayer.GetOriginalFunction(&OnGuidePlayer)(a_pSPU);
+
+	if (!result)
+	{
+		return result;
+	}
+
+	Entity Guide = a_pSPU->GetSelfEntity();
+	Entity Player = Entity::GetPlayer();
+
+	gECharMovementMode PlayerMovement = Player.GetMovementMode();
+
+	if (PlayerMovement == gECharMovementMode::gECharMovementMode_Sprint)
+	{
+		Guide.SetMovementMode(gECharMovementMode::gECharMovementMode_Sprint);
+	}
+	else if (PlayerMovement == gECharMovementMode::gECharMovementMode_Walk)
+	{
+		Guide.SetMovementMode(gECharMovementMode::gECharMovementMode_Walk);
+	}
+	else
+	{
+		Guide.SetMovementMode(gECharMovementMode::gECharMovementMode_Run);
+	}
+
+	if (!CompanionAutoDefend)
+	{
+		return result;
+	}
+
+	bTObjArray<Entity> Ents = Entity::GetEntities();
+	Entity::SortEntityListByDistanceTo(Ents, Player);
+
+	for (GEInt X = 0; X < Ents.GetCount(); X++)
+	{
+		Entity Ent = Ents.GetAt(X);
+
+		if (Ent == Player)
+		{
+			continue;
+		}
+
+		if (Ent == Guide)
+		{
+			continue;
+		}
+
+		if (Ent.Party.GetPartyLeader() == Player)
+		{
+			continue;
+		}
+
+		if (static_cast<GEInt>(Ent.GetDistanceTo(Player)) > 2000)
+		{
+			break;
+		}
+
+		if (Ent.IsNPC() && Ent.NPC.CombatState == 1 && Guide.IsFreeLOS(Ent, GETrue) && (Ent.NPC.GetCurrentTarget() == Player || Ent.NPC.GetCurrentTarget() == Guide || Ent.NPC.GetCurrentTarget().Party.GetPartyLeader() == Player))
+		{
+			if (Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Arena || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Duel || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_None)
+			{
+				continue;
+			}
+
+			gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
+			ScriptAdmin.CallScriptFromScript("AssessTarget", &Guide, &Ent, gEAttackReason::gEAttackReason_PlayerCommand);
+			break;
+		}
+	}
+
+	return result;
+}
+
 static mCFunctionHook Hook_OnFollowPlayer;
 GEBool GE_STDCALL OnFollowPlayer(gCScriptProcessingUnit * a_pSPU)
 {
 	GEBool result = Hook_OnFollowPlayer.GetOriginalFunction(&OnFollowPlayer)(a_pSPU);
 
-	if (result)
+	if (!result)
 	{
-		Entity Follower = Entity(a_pSPU->GetSelfEntity());
-		Entity Player = Entity::GetPlayer();
+		return result;
+	}
 
-		//gECharMovementMode PlayerMovement = Player.GetMovementMode();
-		gECharMovementMode FollowerMovement = Follower.GetMovementMode();
+	Entity Follower = Entity(a_pSPU->GetSelfEntity());
+	Entity Player = Entity::GetPlayer();
 
-		if (FollowerMovement == gECharMovementMode::gECharMovementMode_Walk || FollowerMovement == gECharMovementMode::gECharMovementMode_Run)
+	gECharMovementMode PlayerMovement = Player.GetMovementMode();
+	gECharMovementMode FollowerMovement = Follower.GetMovementMode();
+
+	if (FollowerMovement == gECharMovementMode::gECharMovementMode_Walk || FollowerMovement == gECharMovementMode::gECharMovementMode_Run)
+	{
+		Follower.SetMovementMode(gECharMovementMode::gECharMovementMode_Sprint);
+	}
+
+	if (TeleportCompanionTooFarAway)
+	{
+		eCSceneAdmin & SceneAdmin = *FindModule<eCSceneAdmin>();
+		eCEntityAdmin & EntityAdmin = SceneAdmin.GetAccessToEntityAdmin();
+		GEFloat radius = EntityAdmin.GetROISphere().GetRadius() - 250.0f;
+		if (Follower.GetDistanceTo(Player) >= radius)
 		{
-			Follower.SetMovementMode(gECharMovementMode::gECharMovementMode_Sprint);
-		}
-
-		if (TeleportCompanionTooFarAway)
-		{
-			eCSceneAdmin & SceneAdmin = *FindModule<eCSceneAdmin>();
-			eCEntityAdmin & EntityAdmin = SceneAdmin.GetAccessToEntityAdmin();
-			GEFloat radius = EntityAdmin.GetROISphere().GetRadius() - 250.0f;
-			if (Follower.GetDistanceTo(Player) >= radius)
+			bCMatrix NewPos;
+			if (Follower.FindSpawnPose(NewPos, Player, false, 1))
 			{
-				bCMatrix NewPos;
-				if (Follower.FindSpawnPose(NewPos, Player, false, 1))
-				{
-					Follower.MoveTo(NewPos);
-				}
-				else
-				{
-					Follower.Teleport(Player);
-				}
+				Follower.MoveTo(NewPos);
+			}
+			else
+			{
+				Follower.Teleport(Player);
 			}
 		}
+	}
 
-		if (!CompanionAutoDefend)
+	if (!CompanionAutoDefend)
+	{
+		return result;
+	}
+
+	bTObjArray<Entity> Ents = Entity::GetEntities();
+	Entity::SortEntityListByDistanceTo(Ents, Player);
+
+	for (GEInt X = 0; X < Ents.GetCount(); X++)
+	{
+		Entity Ent = Ents.GetAt(X);
+
+		if (Ent == Player)
 		{
-			return result;
+			continue;
 		}
 
-		bTObjArray<Entity> Ents = Entity::GetEntities();
-		Entity::SortEntityListByDistanceTo(Ents, Player);
-
-		for (GEInt X = 0; X < Ents.GetCount(); X++)
+		if (Ent == Follower)
 		{
-			Entity Ent = Ents.GetAt(X);
+			continue;
+		}
 
-			if (Ent == Player)
+		if (Ent.Party.GetPartyLeader() == Player)
+		{
+			continue;
+		}
+
+		if (static_cast<GEInt>(Ent.GetDistanceTo(Player)) > 2000)
+		{
+			break;
+		}
+
+		if (Ent.IsNPC() && Ent.NPC.CombatState == 1 && Follower.IsFreeLOS(Ent, GETrue) && (Ent.NPC.GetCurrentTarget() == Player || Ent.NPC.GetCurrentTarget() == Follower || Ent.NPC.GetCurrentTarget().Party.GetPartyLeader() == Player))
+		{
+			if (Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Arena || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Duel || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_None)
 			{
 				continue;
 			}
 
-			if (Ent == Follower)
-			{
-				continue;
-			}
-
-			if (Ent.Party.GetPartyLeader() == Player)
-			{
-				continue;
-			}
-
-			if (static_cast<GEInt>(Ent.GetDistanceTo(Player)) > 2000)
-			{
-				break;
-			}
-
-			if (Ent.IsNPC() && Ent.NPC.CombatState == 1 && Follower.IsFreeLOS(Ent, GETrue) && (Ent.NPC.GetCurrentTarget() == Player || Ent.NPC.GetCurrentTarget() == Follower || Ent.NPC.GetCurrentTarget().Party.GetPartyLeader() == Player))
-			{
-				if (Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Arena || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_Duel || Ent.NPC.AttackReason == gEAttackReason::gEAttackReason_None)
-				{
-					continue;
-				}
-
-				gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
-				ScriptAdmin.CallScriptFromScript("AssessTarget", &Follower, &Ent, gEAttackReason::gEAttackReason_PlayerCommand);
-				break;
-			}
+			gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
+			ScriptAdmin.CallScriptFromScript("AssessTarget", &Follower, &Ent, gEAttackReason::gEAttackReason_PlayerCommand);
+			break;
 		}
 	}
 
@@ -660,7 +869,7 @@ GEBool GE_STDCALL _AI_UseInventoryItem(bTObjStack<gScriptRunTimeSingleState> & a
 
 void LoadSettings()
 {
-	spy.Send("G3Fixes - Loading settings");
+	spy.Send(bCString::GetFormattedString("%s - Loading settings", PLUGIN_NAME).GetText());
 	eCConfigFile config = eCConfigFile();
 	if (config.ReadFile(bCString("G3Fixes.ini")))
 	{
@@ -668,6 +877,8 @@ void LoadSettings()
 		TeleportCompanionTooFarAway = config.GetBool(bCString("Main"), bCString("TeleportCompanionTooFarAway"), TeleportCompanionTooFarAway);
 		QuickCastChance = config.GetBool(bCString("Main"), bCString("QuickCastChance"), QuickCastChance);
 		BlockMonsterRespawn = config.GetBool(bCString("Main"), bCString("BlockMonsterRespawn"), BlockMonsterRespawn);
+		HerdUnityActive = config.GetBool(bCString("Main"), bCString("HerdUnity"), HerdUnityActive);
+
 		RemoveWaterfallSoundEffects = config.GetBool(bCString("Optional"), bCString("RemoveWaterfallSoundEffects"), RemoveWaterfallSoundEffects);
 
 		CompanionIconSize = config.GetI32(bCString("CompanionIcon"), bCString("CompanionIconSize"), CompanionIconSize);
@@ -676,7 +887,7 @@ void LoadSettings()
 	}
 	else
 	{
-		spy.Send("G3Fixes - Couldn't find G3Fixes.ini, using default settings.");
+		spy.Send(bCString::GetFormattedString("%s - Couldn't find G3Fixes.ini, using default settings", PLUGIN_NAME).GetText());
 	}
 }
 
@@ -709,8 +920,7 @@ void RemoveWaterfallSounds()
 
 		if (_Template->HasPropertySet("eCAudioEmitter_PS"))
 		{
-			bCString msg = "Removing audio emitter from: " + _Template->GetName();
-			spy.Send(msg.GetText());
+			spy.Send(bCString::GetFormattedString("%s - Removing audio emitter from: %s", PLUGIN_NAME, _Template->GetName()).GetText());
 			_Template->RemovePropertySet("eCAudioEmitter_PS");
 		}
 	}
@@ -733,11 +943,6 @@ void RenderIcon(CFFGFCWnd* DesktopWindow)
 		return;
 	}
 
-	if (Entity::GetPlayer().Party.GetMembers(GEFalse).GetCount() < 1)
-	{
-		return;
-	}
-	
 	if (CompanionAutoDefend)
 	{
 		CompanionIcon.Create("G3Fixes_Companion_Active.png");
@@ -789,12 +994,6 @@ void mCG3Fixes::Process(void)
 		return;
 	}
 
-	auto List = Entity::GetPlayer().Party.GetMembers(GEFalse);
-	if (List.GetCount() < 1)
-	{
-		return;
-	}
-
 	if (eCApplication::GetInstance().GetKeyboard().KeyPressed(CompanionAutoDefendHotkey))
 	{
 		if (!CompanionAutoDefendHotkeyPressed)
@@ -819,12 +1018,20 @@ mCG3Fixes::mCG3Fixes(void)
 	eCModuleAdmin::GetInstance().RegisterModule(*this);
 }
 
+static mCFunctionHook Hook_Test;
+void TestHook()
+{
+
+}
+
 extern "C" __declspec(dllexport)
 gSScriptInit const * GE_STDCALL ScriptInit(void)
 {
 	GetScriptAdmin().LoadScriptDLL("Script_Game.dll");
 
 	static bCAccessorCreator G3Fixes(bTClassName<mCG3Fixes>::GetUnmangled());
+
+	Hook_Entity_EndTransform.Hook(PROC_Script("?EndTransform@Entity@@QAEXXZ"), &Entity_EndTransform, mCBaseHook::mEHookType_ThisCall);
 
 	Hook__AI_UseInventoryItem.Hook(GetScriptAdminExt().GetScriptAIFunction("_AI_UseInventoryItem")->m_funcScriptAIFunction, &_AI_UseInventoryItem, mCBaseHook::mEHookType_OnlyStack);
 
@@ -836,9 +1043,15 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 
 	Hook_Respawn.Hook(GetScriptAdminExt().GetScript("Respawn")->m_funcScript, &Respawn);
 
+	Hook_AssessTarget.Hook(GetScriptAdminExt().GetScript("AssessTarget")->m_funcScript, &AssessTarget);
+
+	Hook_ZS_Threaten_Loop.Hook(GetScriptAdminExt().GetScriptAIState("ZS_Threaten_Loop")->m_funcScriptAIState, &ZS_Threaten_Loop, mCBaseHook::mEHookType_OnlyStack);
+
 	Hook_ZS_ObserveSuspect.Hook(GetScriptAdminExt().GetScriptAIState("ZS_ObserveSuspect")->m_funcScriptAIState, &ZS_ObserveSuspect, mCBaseHook::mEHookType_OnlyStack);
 
 	Hook_OnFollowPlayer.Hook(GetScriptAdminExt().GetScriptAICallback("OnFollowPlayer")->m_funcScriptAICallback, &OnFollowPlayer, mCBaseHook::mEHookType_OnlyStack);
+
+	Hook_OnGuidePlayer.Hook(GetScriptAdminExt().GetScriptAICallback("OnGuidePlayer")->m_funcScriptAICallback, &OnGuidePlayer, mCBaseHook::mEHookType_OnlyStack);
 
 	HookOnExecute.Hook(PROC_Engine("?OnExecute@eCConsole@@MAE_NABVbCString@@AAV2@@Z"), &OnExecuteHook, mCFunctionHook::mEHookType_ThisCall);
 
@@ -855,7 +1068,9 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 		RemoveWaterfallSounds();
 	}
 
-	spy.Send("G3Fixes - Plugin loaded");
+	//Hook_Test.Hook(PROC_Engine("?"), &TestHook, mCBaseHook::mEHookType_ThisCall);
+
+	spy.Send(bCString::GetFormattedString("%s - Plugin loaded", PLUGIN_NAME).GetText());
 
 	return &GetScriptInit();
 }

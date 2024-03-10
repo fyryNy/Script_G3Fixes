@@ -61,10 +61,14 @@
     <ClInclude Include="..\..\Shared\util\ScriptUtil.h">
       <Filter>util</Filter>
     </ClInclude>
+    <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\Shared\util\Logging.inl">
       <Filter>util</Filter>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Script_G3Fixes.rc" />
   </ItemGroup>
 </Project>

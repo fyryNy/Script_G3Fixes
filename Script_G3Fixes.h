@@ -33,4 +33,6 @@ private:
 	mCG3Fixes const &	operator = (mCG3Fixes const &);
 };
 
+#define PLUGIN_NAME "G3Fixes"
+
 #endif
