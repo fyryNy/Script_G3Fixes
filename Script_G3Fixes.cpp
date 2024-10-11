@@ -1,22 +1,5 @@
 #include "Script_G3Fixes.h"
-
-GEBool CompanionAutoDefend = GEFalse;
-GEBool CompanionAutoDefendHotkeyPressed = GEFalse;
-eCInpShared::eEKeyboardStateOffset CompanionAutoDefendHotkey = eCInpShared::eEKeyboardStateOffset::eEKeyboardStateOffset_APOSTROPHE;
-GEBool TeleportCompanionTooFarAway = GETrue;
-GEBool QuickCastChance = GETrue;
-GEBool BlockMonsterRespawn = GEFalse;
-GEBool RemoveWaterfallSoundEffects = GEFalse;
-
-static CFFGFCBitmap CompanionIcon;
-GEI32 CompanionIconSize = 16;
-GEFloat CompanionIconPosTopX = 98.5;
-GEFloat CompanionIconPosTopY = 2.5;
-
-GEBool HerdUnityActive = GEFalse;
-static GEBool HerdUnity = GEFalse;
-static Entity HerdLeader = None;
-
+#include <iostream>
 
 gSScriptInit & GetScriptInit()
 {
@@ -66,49 +49,153 @@ void GE_STDCALL AfterApplicationProcess(void)
 	{
 		GE_FATAL_ERROR_EX("Script_G3Fixes", "Obsolete script \"Script_ItemUseFuncEnabler\" detected.\nPlease remove file \"Script_ItemUseFuncEnabler.dll\" from \"Gothic 3/scripts\" directory.");
 	}
+
+	if (GetScriptAdmin().IsScriptDLLLoaded("Script_NewBalance.dll"))
+	{
+		if (AlwaysShowPercentageProtection)
+		{
+			WriteNops(RVA_Game(0xa65bd), 0xa65c6 - 0xa65bd);
+		}
+	}
+
+	/*auto dll = ::GetModuleHandle("Script_Test.dll");
+	if (dll)
+	{
+		auto RegisterMenu = reinterpret_cast<void(__stdcall *)(bCString&, bCString&)>(::GetProcAddress(dll, "_RegisterMenu@8"));
+		if (RegisterMenu)
+		{
+			char DLLPath[MAX_PATH];
+			HMODULE hThisModule = NULL;
+			GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&GetScriptInit, &hThisModule);
+			GetModuleFileName(hThisModule, DLLPath, _countof(DLLPath));
+
+			RegisterMenu(bCString(DLLPath), bCString("G3Fixes.ini"));
+		}
+	}*/
 }
 
-static mCFunctionHook Hook_AssessTarget;
-GEInt GE_STDCALL AssessTarget(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity, Entity * a_pOtherEntity, GEU32 a_iArgs)
+GEBool IsFriendlyCompanion(Entity* Self, Entity* Other)
 {
-	INIT_SCRIPT();
-
 	auto Player = Entity::GetPlayer();
 
-	auto result = Hook_AssessTarget.GetOriginalFunction(&AssessTarget)(SCRIPT_PARAMS);
+	auto SelfPartyLeader = Self->Party.GetPartyLeader();
+	auto OtherPartyLeader = Other->Party.GetPartyLeader();
 
-	gEAttackReason AttackReason = static_cast<gEAttackReason>(a_iArgs);
-
-	if (HerdLeader == None)
+	if (Other == &Player && SelfPartyLeader == Player)
 	{
-		return result;
+		return GETrue;
 	}
 
-	if (AttackReason != gEAttackReason::gEAttackReason_Angry && !HerdUnity && HerdLeader != SelfEntity/* && OtherEntity != Player*/)
+	if (OtherPartyLeader == None || OtherPartyLeader != Player)
 	{
-		return result;
+		return GEFalse;
 	}
 
-	bTObjArray<Entity> Ents = Entity::GetEntities();
-	Entity::SortEntityListByDistanceTo(Ents, SelfEntity);
-
-	for (GEInt X = 0; X < Ents.GetCount(); X++)
+	if (SelfPartyLeader == OtherPartyLeader)
 	{
-		Entity Ent = Ents.GetAt(X);
+		return GETrue;
+	}
 
-		if (Ent == Player)
+	auto OtherPartyMemberType = Other->Party.PartyMemberType;
+
+	if (OtherPartyMemberType != gEPartyMemberType::gEPartyMemberType_Summoned && OtherPartyMemberType != gEPartyMemberType::gEPartyMemberType_Controlled)
+	{
+		return GEFalse;
+	}
+
+	auto SelfAttitudeToPlayer = Self->NPC.AttitudeToPlayer2;
+	auto SelfSpecies = Self->NPC.Species;
+
+	if (SelfAttitudeToPlayer != gEAttitude::gEAttitude_Friendly && SelfAttitudeToPlayer != gEAttitude::gEAttitude_Neutral && ((SelfSpecies == gESpecies::gESpecies_Orc || SelfSpecies == gESpecies::gESpecies_Human) && SelfAttitudeToPlayer == gEAttitude::gEAttitude_Angry))
+	{
+		return GEFalse;
+	}
+
+	return GETrue;
+}
+
+void GE_STDCALL AssessActivePerception_FixAttack(gCScriptProcessingUnit*& a_pSpu, Entity*& Self, Entity*& Other, gEAttackReason& Reason)
+{
+	if (!a_pSpu || !Self || !Other)
+	{
+		return;
+	}
+
+	if (!Self->IsFreeLOS(*Other, GEFalse))
+	{
+		return;
+	}
+
+	if (Reason == gEAttackReason::gEAttackReason_Enemy && IsFriendlyCompanion(Self, Other))
+	{
+		return;
+	}
+
+	GetScriptAdmin().RunScriptFromScript("AssessTarget", a_pSpu, Self, Other, Reason);
+}
+
+void GE_STDCALL AssessActivePerception_FixAssessAggressor(gCScriptProcessingUnit*& a_pSpu, Entity*& Self, Entity*& Other, gEAttackReason& Reason)
+{
+	if (!a_pSpu || !Self || !Other)
+	{
+		return;
+	}
+
+	std::cout << Self->GetName() << " " << Other->GetName() << " " << Reason << std::endl;
+
+
+	if (IsFriendlyCompanion(Self, Other))
+	{
+		return;
+	}
+
+
+	if (Self->Routine.AIMode == gEAIMode::gEAIMode_Routine)
+	{
+		Self->NPC.SetCurrentTarget(*Other);
+	}
+
+	GetScriptAdmin().RunScriptFromScript("AssessTarget", a_pSpu, Self, Other, Reason);
+}
+
+void GE_STDCALL ZS_Threaten_Loop_HerdUnity(gCScriptProcessingUnit*& a_pSpu, Entity*& Self, Entity*& Other, gEAttackReason& Reason)
+{
+	if (!a_pSpu || !Self || !Other)
+	{
+		return;
+	}
+
+	if (!HerdUnityActive)
+	{
+		return;
+	}
+
+	if (Reason != gEAttackReason::gEAttackReason_Angry)
+	{
+		return;
+	}
+
+	auto Player = Entity::GetPlayer();
+	auto Ents = Entity::GetNPCs();
+	Entity::SortEntityListByDistanceTo(Ents, *Self);
+
+	for (auto i = 0; i < Ents.GetCount(); i++)
+	{
+		auto Ent = Ents.GetAt(i);
+
+		if (Ent == *Self)
 		{
 			continue;
 		}
 
-		if (Ent == SelfEntity)
+		if (Ent == *Other)
 		{
 			continue;
 		}
 
-		if (SelfEntity.GetDistanceTo(Ent) > 2500.0f)
+		if (Self->GetDistanceTo(Ent) >= 2500.0f)
 		{
-			continue;
+			break;
 		}
 
 		if (Ent.IsDead() || Ent.IsDown())
@@ -121,7 +208,7 @@ GEInt GE_STDCALL AssessTarget(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfE
 			continue;
 		}
 
-		if (Ent.NPC.Species != SelfEntity.NPC.Species)
+		if (Ent.NPC.Species != Self->NPC.Species)
 		{
 			continue;
 		}
@@ -131,35 +218,41 @@ GEInt GE_STDCALL AssessTarget(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfE
 			continue;
 		}
 
-		if (Ent.Routine.GetCurrentTask().CompareFast("ZS_Threaten"))
+		if (Ent.Routine.GetCurrentTask().CompareNoCaseFast("ZS_Threaten"))
 		{
 			continue;
 		}
 
-		gCScriptAdmin & ScriptAdmin = GetScriptAdmin();
-		ScriptAdmin.CallScriptFromScript("AssessTarget", &Ent, &OtherEntity, gEAttackReason::gEAttackReason_Angry);
+		GetScriptAdmin().CallScriptFromScript("AssessTarget", &Ent, Other, Reason);
 	}
-
-	return result;
 }
 
-static mCFunctionHook Hook_ZS_Threaten_Loop;
-GEInt GE_STDCALL ZS_Threaten_Loop(GEInt a0, gCScriptProcessingUnit * a_pSPU)
+static mCCallHook Hook_AssessActivePerception_ZS_Threaten;
+void GE_STDCALL AssessActivePerception_ZS_Threaten(gCScriptProcessingUnit*& a_pSpu, Entity*& Self, Entity*& Other, GEInt& Nothing)
 {
-	if (HerdUnityActive)
+	if (!a_pSpu || !Self || !Other)
 	{
-		HerdLeader = a_pSPU->GetSelfEntity();
-		HerdUnity = GETrue;
-
-		GEInt result = Hook_ZS_Threaten_Loop.GetOriginalFunction(&ZS_Threaten_Loop)(a0, a_pSPU);
-
-		HerdLeader = nullptr;
-		HerdUnity = GEFalse;
-
-		return result;
+		return;
 	}
 
-	return Hook_ZS_Threaten_Loop.GetOriginalFunction(&ZS_Threaten_Loop)(a0, a_pSPU);
+	auto IsHumanoid = GetScriptAdmin().RunScriptFromScript("IsHumanoid", a_pSpu, Self, &None, Nothing);
+
+	if (IsHumanoid)
+	{
+		Hook_AssessActivePerception_ZS_Threaten.SetReturnAddress(RVA_ScriptGame(0x29b01));
+		return;
+	}
+
+	auto Target = (Entity*)(RVA_ScriptGame(0x119020));
+
+	if (!Self->IsFreeLOS(*Target, GEFalse))
+	{
+		return;
+	}
+
+	Self->Routine.FullStop();
+	Self->NPC.SetCurrentTarget(*Target);
+	Self->Routine.SetTask("ZS_Threaten");
 }
 
 static mCFunctionHook Hook_Respawn;
@@ -451,6 +544,21 @@ GEBool TryResetPos(Entity NPC)
 	return GEFalse;
 }
 
+GEBool TryReviveAndTP(Entity NPC)
+{
+	NPC.Teleport(Entity::GetPlayer());
+
+	if (IsDead(NPC))
+	{
+		NPC.Routine.FullStop();
+		NPC.Routine.SetTask("ZS_Unconscious");
+
+		return GETrue;
+	}
+
+	return GEFalse;
+}
+
 static mCFunctionHook HookOnExecute;
 GEBool OnExecuteHook(bCString const & a_rCommand, bCString & a_rStrResult)
 {
@@ -539,6 +647,38 @@ GEBool OnExecuteHook(bCString const & a_rCommand, bCString & a_rStrResult)
 		}
 
 		a_rStrResult = "Could not find NPC to revive";
+		return GEFalse;
+	}
+	else if (iParamCount > 0 && arrParams[0].CompareNoCaseFast(bCString("tprevive")))
+	{
+		if (iParamCount > 1)
+		{
+			bCString Search = arrParams[1];
+			auto NPCs = Entity::GetNPCs();
+
+			for (auto Iter = NPCs.Begin(); Iter < NPCs.End(); Iter++)
+			{
+				if (*Iter == None)
+				{
+					continue;
+				}
+
+				Entity NPC = *Iter;
+
+				if (!NPC.GetName().CompareFast(Search))
+				{
+					continue;
+				}
+
+				if (TryReviveAndTP(NPC))
+				{
+					a_rStrResult = "Teleported and revived NPC: " + NPC.GetName();
+					return GETrue;
+				}
+			}
+		}
+
+		a_rStrResult = "Could not find NPC to teleport and revive";
 		return GEFalse;
 	}
 
@@ -686,7 +826,7 @@ GEBool GE_STDCALL OnFollowPlayer(gCScriptProcessingUnit * a_pSPU)
 	Entity Follower = Entity(a_pSPU->GetSelfEntity());
 	Entity Player = Entity::GetPlayer();
 
-	gECharMovementMode PlayerMovement = Player.GetMovementMode();
+	//gECharMovementMode PlayerMovement = Player.GetMovementMode();
 	gECharMovementMode FollowerMovement = Follower.GetMovementMode();
 
 	if (FollowerMovement == gECharMovementMode::gECharMovementMode_Walk || FollowerMovement == gECharMovementMode::gECharMovementMode_Run)
@@ -867,6 +1007,20 @@ GEBool GE_STDCALL _AI_UseInventoryItem(bTObjStack<gScriptRunTimeSingleState> & a
 	return Hook__AI_UseInventoryItem.GetOriginalFunction(&_AI_UseInventoryItem)(a_rRunTimeStack, a_pSPU);
 }
 
+AttributeRequirementFixMode GetAttributeRequirementFixMode(bCString ModeString)
+{
+	if (ModeString.CompareNoCaseFast("DontAddEquipmentBonus"))
+	{
+		return AttributeRequirementFixMode::DontAddEquipmentBonus;
+	}
+	else if (ModeString.CompareNoCaseFast("AddEquipmentBonus"))
+	{
+		return AttributeRequirementFixMode::AddEquipmentBonus;
+	}
+
+	return AttributeRequirementFixMode::Disabled;
+}
+
 void LoadSettings()
 {
 	spy.Send(bCString::GetFormattedString("%s - Loading settings", PLUGIN_NAME).GetText());
@@ -879,11 +1033,19 @@ void LoadSettings()
 		BlockMonsterRespawn = config.GetBool(bCString("Main"), bCString("BlockMonsterRespawn"), BlockMonsterRespawn);
 		HerdUnityActive = config.GetBool(bCString("Main"), bCString("HerdUnity"), HerdUnityActive);
 
-		RemoveWaterfallSoundEffects = config.GetBool(bCString("Optional"), bCString("RemoveWaterfallSoundEffects"), RemoveWaterfallSoundEffects);
+		CurrentAttributeRequirementFixModeSkills = GetAttributeRequirementFixMode(config.GetString(bCString("Main"), bCString("AttributeRequirementFixModeSkills"), bCString("DontAddEquipmentBonus")));
+		CurrentAttributeRequirementFixModeEquipment = GetAttributeRequirementFixMode(config.GetString(bCString("Main"), bCString("AttributeRequirementFixModeEquipment"), bCString("AddEquipmentBonus")));
 
+		RemoveWaterfallSoundEffects = config.GetBool(bCString("Optional"), bCString("RemoveWaterfallSoundEffects"), RemoveWaterfallSoundEffects);
+		AlwaysShowPercentageProtection = config.GetBool(bCString("Optional"), bCString("AlwaysShowPercentageProtection"), AlwaysShowPercentageProtection);
+		
 		CompanionIconSize = config.GetI32(bCString("CompanionIcon"), bCString("CompanionIconSize"), CompanionIconSize);
 		CompanionIconPosTopX = config.GetFloat(bCString("CompanionIcon"), bCString("CompanionIconPosTopX"), CompanionIconPosTopX);
 		CompanionIconPosTopY = config.GetFloat(bCString("CompanionIcon"), bCString("CompanionIconPosTopY"), CompanionIconPosTopY);
+
+		TransformationIconSize = config.GetI32(bCString("TransformationIcon"), bCString("TransformationIconSize"), TransformationIconSize);
+		TransformationIconPosTopX = config.GetFloat(bCString("TransformationIcon"), bCString("TransformationIconPosTopX"), TransformationIconPosTopX);
+		TransformationIconPosTopY = config.GetFloat(bCString("TransformationIcon"), bCString("TransformationIconPosTopY"), TransformationIconPosTopY);
 	}
 	else
 	{
@@ -943,24 +1105,126 @@ void RenderIcon(CFFGFCWnd* DesktopWindow)
 		return;
 	}
 
-	if (CompanionAutoDefend)
-	{
-		CompanionIcon.Create("G3Fixes_Companion_Active.png");
-	}
-	else
-	{
-		CompanionIcon.Create("G3Fixes_Companion_Passive.png");
-	}
-
 	auto DeviceContext = DesktopWindow->GetDC();
 	bCRect ClientRect;
 	DesktopWindow->GetClientRect(ClientRect);
 
-	GEI32 TopX = (ClientRect.GetWidth() * CompanionIconPosTopX) / 100;
-	GEI32 TopY = (ClientRect.GetHeight() * CompanionIconPosTopY) / 100;
+	{
+		if (CompanionAutoDefend)
+		{
+			CompanionIcon.Create("G3Fixes_Companion_Active.png");
+		}
+		else
+		{
+			CompanionIcon.Create("G3Fixes_Companion_Passive.png");
+		}
 
-	bCRect DrawBox(TopX, TopY, TopX + CompanionIconSize, TopY + CompanionIconSize);
-	DeviceContext->DrawBitmap(&CompanionIcon, &DrawBox, 0, 0.0f);
+		GEI32 TopX = static_cast<GEI32>((ClientRect.GetWidth() * CompanionIconPosTopX) / 100);
+		GEI32 TopY = static_cast<GEI32>((ClientRect.GetHeight() * CompanionIconPosTopY) / 100);
+
+		bCRect DrawBox(TopX, TopY, TopX + CompanionIconSize, TopY + CompanionIconSize);
+		DeviceContext->DrawBitmap(&CompanionIcon, &DrawBox, 0, 0.0f);
+	}
+
+	auto Player = Entity::GetPlayer();
+
+	if (!Player.NPC.IsTransformed())
+	{
+		return;
+	}
+
+
+	{
+		auto SecondsTransformRemain = static_cast<GEInt>(Player.PlayerMemory.SecondsTransformRemain);
+
+		if (SecondsTransformRemain <= 15)
+		{
+			TransformationIcon.Create("G3Fixes_Transformation_End.png");
+		}
+		else
+		{
+			TransformationIcon.Create("G3Fixes_Transformation.png");
+		}
+
+		GEI32 TopX = static_cast<GEI32>((ClientRect.GetWidth() * TransformationIconPosTopX) / 100);
+		GEI32 TopY = static_cast<GEI32>((ClientRect.GetHeight() * TransformationIconPosTopY) / 100);
+
+		bCRect DrawBox(TopX, TopY, TopX + TransformationIconSize, TopY + TransformationIconSize);
+		DeviceContext->DrawBitmap(&TransformationIcon, &DrawBox, 0, 0.0f);
+
+		bCUnicodeString TransformationTimeTXT = bCUnicodeString(FormatTime(SecondsTransformRemain));
+		bCRect TransformationTimeTXTRect;
+		DeviceContext->CalcTextRect(0, TransformationTimeTXT, -1, TransformationTimeTXTRect, 0);
+		GEI32 TransformationTimeTXTTopX = TopX + TransformationIconSize;
+		GEI32 TransformationTimeTXTTopY = TopY + (TransformationIconSize / 2) - (TransformationTimeTXTRect.GetHeight() / 2);
+
+		bCRect DrawBox2(TransformationTimeTXTTopX, TransformationTimeTXTTopY, TransformationTimeTXTTopX + TransformationTimeTXTRect.GetWidth(), TransformationTimeTXTTopY + TransformationTimeTXTRect.GetHeight());
+		DeviceContext->DrawTextA(0, TransformationTimeTXT, -1, &DrawBox2, 0, bCFloatAlphaColor(bCColorBase::bEColor_White), &bCFloatAlphaColor(bCColorBase::bEColor_Black));
+	}
+}
+
+//For skills
+static mCCallHook Hook_FixAttributeRequirement;
+void GE_STDCALL FixAttributeRequirement(gCAttribute& Attr)
+{
+	if (auto pStat = dynamic_cast<gCStat*>(&Attr))
+	{
+		if (CurrentAttributeRequirementFixModeSkills == AttributeRequirementFixMode::AddEquipmentBonus)
+		{
+			Hook_FixAttributeRequirement.SetImmEbx(pStat->GetMaximum());
+		}
+		else
+		{
+			Hook_FixAttributeRequirement.SetImmEbx(pStat->GetBaseMaximum());
+		}
+	}
+	else
+	{
+		if (CurrentAttributeRequirementFixModeSkills == AttributeRequirementFixMode::AddEquipmentBonus)
+		{
+			Hook_FixAttributeRequirement.SetImmEbx(Attr.GetMaximum());
+		}
+		else
+		{
+			Hook_FixAttributeRequirement.SetImmEbx(Attr.GetBaseValue());
+		}
+	}
+}
+
+//For equipment
+static mCFunctionHook Hook_gCPlayerMemory_PS_CalcMissingValue;
+GEInt gCPlayerMemory_PS_CalcMissingValue(bCString& AttrName, GEInt AttrReq)
+{
+	auto This = Hook_gCPlayerMemory_PS_CalcMissingValue.GetSelf<gCPlayerMemory_PS*>();
+
+	if (!This)
+	{
+		return 0;
+	}
+
+	auto Attr = This->GetAttribute(AttrName);
+
+	if (!Attr)
+	{
+		return 0;
+	}
+
+	auto AttrVal = Attr->GetBaseValue();
+	if (CurrentAttributeRequirementFixModeEquipment == AttributeRequirementFixMode::AddEquipmentBonus)
+	{
+		AttrVal = Attr->GetMaximum();
+	}
+
+	if (auto pStat = dynamic_cast<gCStat*>(Attr))
+	{
+		AttrVal = pStat->GetBaseMaximum();
+		if (CurrentAttributeRequirementFixModeEquipment == AttributeRequirementFixMode::AddEquipmentBonus)
+		{
+			AttrVal = Attr->GetMaximum();
+		}
+	}
+	
+	return AttrReq - AttrVal;
 }
 
 static mCFunctionHook Hook__CFFGFCWnd_OnPaint;
@@ -1011,17 +1275,12 @@ void mCG3Fixes::Process(void)
 mCG3Fixes::~mCG3Fixes(void)
 {
 	CompanionIcon.Destroy();
+	TransformationIcon.Destroy();
 }
 
 mCG3Fixes::mCG3Fixes(void)
 {
 	eCModuleAdmin::GetInstance().RegisterModule(*this);
-}
-
-static mCFunctionHook Hook_Test;
-void TestHook()
-{
-
 }
 
 extern "C" __declspec(dllexport)
@@ -1043,10 +1302,6 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 
 	Hook_Respawn.Hook(GetScriptAdminExt().GetScript("Respawn")->m_funcScript, &Respawn);
 
-	Hook_AssessTarget.Hook(GetScriptAdminExt().GetScript("AssessTarget")->m_funcScript, &AssessTarget);
-
-	Hook_ZS_Threaten_Loop.Hook(GetScriptAdminExt().GetScriptAIState("ZS_Threaten_Loop")->m_funcScriptAIState, &ZS_Threaten_Loop, mCBaseHook::mEHookType_OnlyStack);
-
 	Hook_ZS_ObserveSuspect.Hook(GetScriptAdminExt().GetScriptAIState("ZS_ObserveSuspect")->m_funcScriptAIState, &ZS_ObserveSuspect, mCBaseHook::mEHookType_OnlyStack);
 
 	Hook_OnFollowPlayer.Hook(GetScriptAdminExt().GetScriptAICallback("OnFollowPlayer")->m_funcScriptAICallback, &OnFollowPlayer, mCBaseHook::mEHookType_OnlyStack);
@@ -1056,6 +1311,90 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 	HookOnExecute.Hook(PROC_Engine("?OnExecute@eCConsole@@MAE_NABVbCString@@AAV2@@Z"), &OnExecuteHook, mCFunctionHook::mEHookType_ThisCall);
 
 	Hook__CFFGFCWnd_OnPaint.Hook(PROC_GFC("?OnPaint@CFFGFCWnd@@UAEXXZ"), &CFFGFCWnd_OnPaint, mCBaseHook::mEHookType_ThisCall);
+
+	Hook_AssessActivePerception_ZS_Threaten.Prepare(RVA_ScriptGame(0x29aad), &AssessActivePerception_ZS_Threaten, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x29aea - 0x29aad)
+		.RestoreRegister()
+		.VariableReturnAddress()
+		.Hook();
+
+	static mCCallHook Hook_AssessActivePerception_AttackEnemy1;
+	Hook_AssessActivePerception_AttackEnemy1.Prepare(RVA_ScriptGame(0x299b8), &AssessActivePerception_FixAttack, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();
+
+	static mCCallHook Hook_AssessActivePerception_AttackEnemy2;
+	Hook_AssessActivePerception_AttackEnemy2.Prepare(RVA_ScriptGame(0x29a35), &AssessActivePerception_FixAttack, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();
+
+	/*WriteNops(RVA_ScriptGame(0x24796), 0x247a8 - 0x24796);
+	static mCCallHook Hook_AssessActivePerception_ReactToDamage1;
+	Hook_AssessActivePerception_ReactToDamage1.Prepare(RVA_ScriptGame(0x247bb), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();
+
+	static mCCallHook Hook_AssessActivePerception_ReactToDamage2;
+	Hook_AssessActivePerception_ReactToDamage2.Prepare(RVA_ScriptGame(0x24708), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();
+
+	static mCCallHook Hook_AssessActivePerception_ReactToDamage3;
+	Hook_AssessActivePerception_ReactToDamage3.Prepare(RVA_ScriptGame(0x24675), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();*/
+
+	static mCCallHook Hook_AssessActivePerception_AttackPrey;
+	Hook_AssessActivePerception_AttackPrey.Prepare(RVA_ScriptGame(0x2990d), &AssessActivePerception_FixAttack, mCBaseHook::mEHookType_Mixed)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.ReplaceSize(0x5)
+		.Hook();
+
+
+	static mCCallHook Hook_ZS_Threaten_Loop_HerdUnity1;
+	Hook_ZS_Threaten_Loop_HerdUnity1.Prepare(RVA_ScriptGame(0x264fa), &ZS_Threaten_Loop_HerdUnity)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.InsertCall()
+		.Hook();
+
+	static mCCallHook Hook_ZS_Threaten_Loop_HerdUnity2;
+	Hook_ZS_Threaten_Loop_HerdUnity2.Prepare(RVA_ScriptGame(0x26545), &ZS_Threaten_Loop_HerdUnity)
+		.AddStackArg(0x0)
+		.AddStackArg(0x4)
+		.AddStackArg(0x8)
+		.AddStackArg(0xc)
+		.InsertCall()
+		.Hook();
 
 	Hook_AfterApplicationProcess
 		.Prepare(RVA_Engine(0x1677C), &AfterApplicationProcess)
@@ -1068,7 +1407,20 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 		RemoveWaterfallSounds();
 	}
 
-	//Hook_Test.Hook(PROC_Engine("?"), &TestHook, mCBaseHook::mEHookType_ThisCall);
+	if (CurrentAttributeRequirementFixModeSkills != AttributeRequirementFixMode::Disabled)
+	{
+		Hook_FixAttributeRequirement
+			.Prepare(RVA_Game(0xb656f), &FixAttributeRequirement, mCBaseHook::mEHookType_Mixed, mCRegisterBase::mERegisterType_Ebx)
+			.AddRegArg(mCRegisterBase::mERegisterType_Eax)
+			.RestoreRegister()
+			.ReplaceSize(0x3)
+			.Hook();
+	}
+
+	if (CurrentAttributeRequirementFixModeEquipment != AttributeRequirementFixMode::Disabled)
+	{
+		Hook_gCPlayerMemory_PS_CalcMissingValue.Hook(PROC_Game("?CalcMissingValue@gCPlayerMemory_PS@@QBEHABVbCString@@H@Z"), &gCPlayerMemory_PS_CalcMissingValue, mCBaseHook::mEHookType_ThisCall);
+	}
 
 	spy.Send(bCString::GetFormattedString("%s - Plugin loaded", PLUGIN_NAME).GetText());
 
@@ -1081,6 +1433,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	{
 	case DLL_PROCESS_ATTACH:
 		::DisableThreadLibraryCalls(hModule);
+		//AllocConsole();
+		//freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
 		break;
 	case DLL_PROCESS_DETACH:
 		break;
