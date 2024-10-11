@@ -57,21 +57,6 @@ void GE_STDCALL AfterApplicationProcess(void)
 			WriteNops(RVA_Game(0xa65bd), 0xa65c6 - 0xa65bd);
 		}
 	}
-
-	/*auto dll = ::GetModuleHandle("Script_Test.dll");
-	if (dll)
-	{
-		auto RegisterMenu = reinterpret_cast<void(__stdcall *)(bCString&, bCString&)>(::GetProcAddress(dll, "_RegisterMenu@8"));
-		if (RegisterMenu)
-		{
-			char DLLPath[MAX_PATH];
-			HMODULE hThisModule = NULL;
-			GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&GetScriptInit, &hThisModule);
-			GetModuleFileName(hThisModule, DLLPath, _countof(DLLPath));
-
-			RegisterMenu(bCString(DLLPath), bCString("G3Fixes.ini"));
-		}
-	}*/
 }
 
 GEBool IsFriendlyCompanion(Entity* Self, Entity* Other)
@@ -129,30 +114,6 @@ void GE_STDCALL AssessActivePerception_FixAttack(gCScriptProcessingUnit*& a_pSpu
 	if (Reason == gEAttackReason::gEAttackReason_Enemy && IsFriendlyCompanion(Self, Other))
 	{
 		return;
-	}
-
-	GetScriptAdmin().RunScriptFromScript("AssessTarget", a_pSpu, Self, Other, Reason);
-}
-
-void GE_STDCALL AssessActivePerception_FixAssessAggressor(gCScriptProcessingUnit*& a_pSpu, Entity*& Self, Entity*& Other, gEAttackReason& Reason)
-{
-	if (!a_pSpu || !Self || !Other)
-	{
-		return;
-	}
-
-	std::cout << Self->GetName() << " " << Other->GetName() << " " << Reason << std::endl;
-
-
-	if (IsFriendlyCompanion(Self, Other))
-	{
-		return;
-	}
-
-
-	if (Self->Routine.AIMode == gEAIMode::gEAIMode_Routine)
-	{
-		Self->NPC.SetCurrentTarget(*Other);
 	}
 
 	GetScriptAdmin().RunScriptFromScript("AssessTarget", a_pSpu, Self, Other, Reason);
@@ -332,9 +293,9 @@ GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEnti
 		{
 			Chance = 100;
 		}
-		else if (QuickCastChance)
+		else
 		{
-			Chance = 10;
+			Chance = QuickCastFreezeChancePercent;
 		}
 	}
 	else if (IsNormalProjectile(Damager))
@@ -351,11 +312,11 @@ GEInt GE_STDCALL CanFreeze(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEnti
 		gEAction DamagerOwnerAction = DamagerOwner.Routine.GetProperty<PSRoutine::PropertyAction>();
 		if (DamagerOwnerAction == gEAction::gEAction_PowerAttack)
 		{
-			Chance = 35;
+			Chance = MeleeFreezeChancePercentPowerAttack;
 		}
 		else
 		{
-			Chance = 30;
+			Chance = MeleeFreezeChancePercent;
 		}
 	}
 
@@ -437,9 +398,9 @@ GEInt GE_STDCALL CanBurn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity
 		{
 			Chance = 100;
 		}
-		else if (QuickCastChance)
+		else
 		{
-			Chance = 10;
+			Chance = QuickCastBurnChancePercent;
 		}
 	}
 	else if (IsNormalProjectile(Damager))
@@ -456,11 +417,11 @@ GEInt GE_STDCALL CanBurn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity
 		gEAction DamagerOwnerAction = DamagerOwner.Routine.GetProperty<PSRoutine::PropertyAction>();
 		if (DamagerOwnerAction == gEAction::gEAction_PowerAttack)
 		{
-			Chance = 35;
+			Chance = MeleeBurnChancePercentPowerAttack;
 		}
 		else
 		{
-			Chance = 30;
+			Chance = MeleeBurnChancePercent;
 		}
 	}
 
@@ -1029,9 +990,17 @@ void LoadSettings()
 	{
 		CompanionAutoDefendHotkey = eCApplication::GetInstance().GetKeyboard().GetKeyByName(config.GetString(bCString("Main"), bCString("CompanionAutoDefendHotkey"), bCString("APOSTROPHE")));
 		TeleportCompanionTooFarAway = config.GetBool(bCString("Main"), bCString("TeleportCompanionTooFarAway"), TeleportCompanionTooFarAway);
-		QuickCastChance = config.GetBool(bCString("Main"), bCString("QuickCastChance"), QuickCastChance);
 		BlockMonsterRespawn = config.GetBool(bCString("Main"), bCString("BlockMonsterRespawn"), BlockMonsterRespawn);
 		HerdUnityActive = config.GetBool(bCString("Main"), bCString("HerdUnity"), HerdUnityActive);
+
+		QuickCastFreezeChancePercent = config.GetInt(bCString("Main"), bCString("QuickCastFreezeChancePercent"), QuickCastFreezeChancePercent);
+		QuickCastBurnChancePercent = config.GetInt(bCString("Main"), bCString("QuickCastBurnChancePercent"), QuickCastBurnChancePercent);
+
+		MeleeFreezeChancePercent = config.GetInt(bCString("Main"), bCString("MeleeFreezeChancePercent"), MeleeFreezeChancePercent);
+		MeleeFreezeChancePercentPowerAttack = config.GetInt(bCString("Main"), bCString("MeleeFreezeChancePercentPowerAttack"), MeleeFreezeChancePercentPowerAttack);
+
+		MeleeBurnChancePercent = config.GetInt(bCString("Main"), bCString("MeleeBurnChancePercent"), MeleeBurnChancePercent);
+		MeleeBurnChancePercentPowerAttack = config.GetInt(bCString("Main"), bCString("MeleeBurnChancePercentPowerAttack"), MeleeBurnChancePercentPowerAttack);
 
 		CurrentAttributeRequirementFixModeSkills = GetAttributeRequirementFixMode(config.GetString(bCString("Main"), bCString("AttributeRequirementFixModeSkills"), bCString("DontAddEquipmentBonus")));
 		CurrentAttributeRequirementFixModeEquipment = GetAttributeRequirementFixMode(config.GetString(bCString("Main"), bCString("AttributeRequirementFixModeEquipment"), bCString("AddEquipmentBonus")));
@@ -1339,34 +1308,6 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 		.AddStackArg(0xc)
 		.ReplaceSize(0x5)
 		.Hook();
-
-	/*WriteNops(RVA_ScriptGame(0x24796), 0x247a8 - 0x24796);
-	static mCCallHook Hook_AssessActivePerception_ReactToDamage1;
-	Hook_AssessActivePerception_ReactToDamage1.Prepare(RVA_ScriptGame(0x247bb), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
-		.AddStackArg(0x0)
-		.AddStackArg(0x4)
-		.AddStackArg(0x8)
-		.AddStackArg(0xc)
-		.ReplaceSize(0x5)
-		.Hook();
-
-	static mCCallHook Hook_AssessActivePerception_ReactToDamage2;
-	Hook_AssessActivePerception_ReactToDamage2.Prepare(RVA_ScriptGame(0x24708), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
-		.AddStackArg(0x0)
-		.AddStackArg(0x4)
-		.AddStackArg(0x8)
-		.AddStackArg(0xc)
-		.ReplaceSize(0x5)
-		.Hook();
-
-	static mCCallHook Hook_AssessActivePerception_ReactToDamage3;
-	Hook_AssessActivePerception_ReactToDamage3.Prepare(RVA_ScriptGame(0x24675), &AssessActivePerception_FixAssessAggressor, mCBaseHook::mEHookType_Mixed)
-		.AddStackArg(0x0)
-		.AddStackArg(0x4)
-		.AddStackArg(0x8)
-		.AddStackArg(0xc)
-		.ReplaceSize(0x5)
-		.Hook();*/
 
 	static mCCallHook Hook_AssessActivePerception_AttackPrey;
 	Hook_AssessActivePerception_AttackPrey.Prepare(RVA_ScriptGame(0x2990d), &AssessActivePerception_FixAttack, mCBaseHook::mEHookType_Mixed)
