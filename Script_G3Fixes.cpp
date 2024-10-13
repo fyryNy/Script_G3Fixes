@@ -15,6 +15,20 @@ void SearchAndMergeEffects(const bCString& directory) {
 	vfs.FindFiles(directory, arrFiles);
 	vfs.FindDirectories(directory, arrDirs);
 
+	auto EffectModule = eCModuleAdmin::GetInstance().FindModule("gCEffectModule");
+	auto EffectModulePtr = reinterpret_cast<DWORD>(&EffectModule);
+
+	if (EffectModulePtr == 0)
+		return;
+	DWORD gCEffectSystemPtr = *(DWORD*)EffectModulePtr + 0x14;
+	if (gCEffectSystemPtr == 0)
+		return;
+	gCEffectMap* EffectMap = (gCEffectMap*)(*(DWORD*)gCEffectSystemPtr + 0x4);
+	if (EffectMap == nullptr)
+		return;
+
+	gCEffectMap NewEM;
+
 	for (auto it = arrFiles.Begin(); it != arrFiles.End(); it++) {
 		bTObjArray< bCString > fileSplitted = SplitString(*it, ".", GEFalse, GEFalse);
 		bCString fileName = fileSplitted.GetAt(0);
@@ -26,21 +40,8 @@ void SearchAndMergeEffects(const bCString& directory) {
 		bTObjArray< bCString > dirSplitted = SplitString(directory, "/", GEFalse, GEFalse);
 		dirSplitted.Add(*it);
 		bCString filePath = JoinString(dirSplitted, 0, "/");
-
-		auto EffectModule = eCModuleAdmin::GetInstance().FindModule("gCEffectModule");
-		auto EffectModulePtr = reinterpret_cast<DWORD>(&EffectModule);
-
-		if (EffectModulePtr == 0)
-			return;
-		DWORD gCEffectSystemPtr = *(DWORD*)EffectModulePtr + 0x14;
-		if (gCEffectSystemPtr == 0)
-			return;
-		gCEffectMap* EffectMap = (gCEffectMap*)(*(DWORD*)gCEffectSystemPtr + 0x4);
-		if (EffectMap == nullptr)
-			return;
-
-		gCEffectMap NewEM;
 		NewEM.Load(filePath);
+
 		for (auto iter = NewEM.Begin(); iter != NewEM.End(); iter++) {
 			std::cout << "EffectName: " << iter.GetKey() << "\n";
 			EffectMap->RemoveAt(iter.GetKey());
@@ -1428,8 +1429,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	{
 	case DLL_PROCESS_ATTACH:
 		::DisableThreadLibraryCalls(hModule);
-		//AllocConsole();
-		//freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+		AllocConsole();
+		freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
 		break;
 	case DLL_PROCESS_DETACH:
 		break;
