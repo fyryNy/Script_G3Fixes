@@ -7,6 +7,57 @@ gSScriptInit & GetScriptInit()
 	return s_ScriptInit;
 }
 
+void SearchAndMergeEffects(const bCString& directory) {
+	bTObjArray<bCString> arrFiles;
+	bTObjArray<bCString> arrDirs;
+	eCVirtualFileSystem& vfs = eCVirtualFileSystem::GetInstance();
+
+	vfs.FindFiles(directory, arrFiles);
+	vfs.FindDirectories(directory, arrDirs);
+
+	auto EffectModule = eCModuleAdmin::GetInstance().FindModule("gCEffectModule");
+	auto EffectModulePtr = reinterpret_cast<DWORD>(&EffectModule);
+
+	if (EffectModulePtr == 0)
+		return;
+	DWORD gCEffectSystemPtr = *(DWORD*)EffectModulePtr + 0x14;
+	if (gCEffectSystemPtr == 0)
+		return;
+	gCEffectMap* EffectMap = (gCEffectMap*)(*(DWORD*)gCEffectSystemPtr + 0x4);
+	if (EffectMap == nullptr)
+		return;
+
+	gCEffectMap NewEM;
+
+	for (auto it = arrFiles.Begin(); it != arrFiles.End(); it++) {
+		bTObjArray< bCString > fileSplitted = SplitString(*it, ".", GEFalse, GEFalse);
+		bCString fileName = fileSplitted.GetAt(0);
+		bCString fileExt = fileSplitted.GetAt(1);
+
+		// Ignore original g3.efm
+		if (fileExt != "efm" || fileName == "g3") continue;
+
+		bTObjArray< bCString > dirSplitted = SplitString(directory, "/", GEFalse, GEFalse);
+		dirSplitted.Add(*it);
+		bCString filePath = JoinString(dirSplitted, 0, "/");
+		NewEM.Load(filePath);
+
+		for (auto iter = NewEM.Begin(); iter != NewEM.End(); iter++) {
+			std::cout << "EffectName: " << iter.GetKey() << "\n";
+			EffectMap->RemoveAt(iter.GetKey());
+			gCEffectCommandSequence* effectCommand = EffectMap->InsertNewAt(iter.GetKey());
+			*effectCommand = iter.GetNode()->m_Element;
+		}
+		std::cout << filePath << " merged!" << "\n";
+	}
+
+	// Recursive search
+	for (auto it = arrDirs.Begin(); it != arrDirs.End(); it++) {
+		bCString subDirPath = directory + "/" + *it;
+		SearchAndMergeEffects(subDirPath);
+	}
+}
+
 void TryFixMist(void)
 {
 	auto Player = Entity::GetPlayer();
@@ -57,6 +108,9 @@ void GE_STDCALL AfterApplicationProcess(void)
 			WriteNops(RVA_Game(0xa65bd), 0xa65c6 - 0xa65bd);
 		}
 	}
+
+	SearchAndMergeEffects("Data");
+
 }
 
 GEBool IsFriendlyCompanion(Entity* Self, Entity* Other)
@@ -1057,6 +1111,7 @@ void RemoveWaterfallSounds()
 	}
 }
 
+
 void RenderIcon(CFFGFCWnd* DesktopWindow)
 {
 	if (!gCSession::GetSession().IsValid() || gCSession::GetSession().IsPaused() || !gCSession::GetSession().GetGUIManager())
@@ -1374,8 +1429,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID)
 	{
 	case DLL_PROCESS_ATTACH:
 		::DisableThreadLibraryCalls(hModule);
-		//AllocConsole();
-		//freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+		AllocConsole();
+		freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
 		break;
 	case DLL_PROCESS_DETACH:
 		break;
