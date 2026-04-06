@@ -1,10 +1,60 @@
 #include "Script_G3Fixes.h"
-#include <iostream>
 
 gSScriptInit & GetScriptInit()
 {
 	static gSScriptInit s_ScriptInit;
 	return s_ScriptInit;
+}
+
+void SearchAndMergeEffects(const bCString& directory) {
+	bTObjArray<bCString> arrFiles;
+	bTObjArray<bCString> arrDirs;
+	eCVirtualFileSystem& vfs = eCVirtualFileSystem::GetInstance();
+
+	vfs.FindFiles(directory, arrFiles);
+	vfs.FindDirectories(directory, arrDirs);
+
+	auto EffectModule = eCModuleAdmin::GetInstance().FindModule("gCEffectModule");
+	auto EffectModulePtr = reinterpret_cast<DWORD>(&EffectModule);
+
+	if (EffectModulePtr == 0)
+		return;
+	DWORD gCEffectSystemPtr = *(DWORD*)EffectModulePtr + 0x14;
+	if (gCEffectSystemPtr == 0)
+		return;
+	gCEffectMap* EffectMap = (gCEffectMap*)(*(DWORD*)gCEffectSystemPtr + 0x4);
+	if (EffectMap == nullptr)
+		return;
+
+	gCEffectMap NewEM;
+
+	for (auto it = arrFiles.Begin(); it != arrFiles.End(); it++) {
+		bTObjArray< bCString > fileSplitted = SplitString(*it, ".", GEFalse, GEFalse);
+		bCString fileName = fileSplitted.GetAt(0);
+		bCString fileExt = fileSplitted.GetAt(1);
+
+		// Ignore original g3.efm
+		if (fileExt != "efm" || fileName == "g3") continue;
+
+		bTObjArray< bCString > dirSplitted = SplitString(directory, "/", GEFalse, GEFalse);
+		dirSplitted.Add(*it);
+		bCString filePath = JoinString(dirSplitted, 0, "/");
+		NewEM.Load(filePath);
+
+		for (auto iter = NewEM.Begin(); iter != NewEM.End(); iter++) {
+			spy.Send(bCString::GetFormattedString("%s - EffectName: %s", PLUGIN_NAME, iter.GetKey().GetText()).GetText());
+			EffectMap->RemoveAt(iter.GetKey());
+			gCEffectCommandSequence* effectCommand = EffectMap->InsertNewAt(iter.GetKey());
+			*effectCommand = iter.GetNode()->m_Element;
+		}
+		spy.Send(bCString::GetFormattedString("%s - %s merged!", PLUGIN_NAME, filePath.GetText()).GetText());
+	}
+
+	// Recursive search
+	for (auto it = arrDirs.Begin(); it != arrDirs.End(); it++) {
+		bCString subDirPath = directory + "/" + *it;
+		SearchAndMergeEffects(subDirPath);
+	}
 }
 
 void TryFixMist(void)
@@ -57,6 +107,8 @@ void GE_STDCALL AfterApplicationProcess(void)
 			WriteNops(RVA_Game(0xa65bd), 0xa65c6 - 0xa65bd);
 		}
 	}
+
+	SearchAndMergeEffects("Data");
 }
 
 GEBool IsFriendlyCompanion(Entity* Self, Entity* Other)
@@ -224,11 +276,35 @@ GEInt GE_STDCALL Respawn(gCScriptProcessingUnit * a_pSPU, Entity * a_pSelfEntity
 
 	if (result != 0 && BlockMonsterRespawn)
 	{
-		spy.Send(bCString::GetFormattedString("%s - Blocking respawn of %s", PLUGIN_NAME, SelfEntity.GetName()).GetText());
+		spy.Send(bCString::GetFormattedString("%s - Blocking respawn of %s", PLUGIN_NAME, SelfEntity.GetName().GetText()).GetText());
 		SelfEntity.Kill();
 	}
 
 	return result;
+}
+
+GEBool IsSpellContainer(Entity a_Entity)
+{
+	typedef GEBool(GE_STDCALL *mFIsSpellContainer)(Entity);
+	static mFIsSpellContainer s_fIsSpellContainer = force_cast<mFIsSpellContainer>(RVA_ScriptGame(0x2AEB0));
+
+	return s_fIsSpellContainer(a_Entity);
+}
+
+GEBool IsMagicProjectile(Entity a_Entity)
+{
+	typedef GEBool(GE_STDCALL *mFIsMagicProjectile)(Entity);
+	static mFIsMagicProjectile s_fIsMagicProjectile = force_cast<mFIsMagicProjectile>(RVA_ScriptGame(0x2AF20));
+
+	return s_fIsMagicProjectile(a_Entity);
+}
+
+GEBool IsNormalProjectile(Entity a_Entity)
+{
+	typedef GEBool(GE_STDCALL *mFIsNormalProjectile)(Entity);
+	static mFIsNormalProjectile s_fIsNormalProjectile = force_cast<mFIsNormalProjectile>(RVA_ScriptGame(0x2AF70));
+
+	return s_fIsNormalProjectile(a_Entity);
 }
 
 static mCFunctionHook Hook_CanFreeze;
@@ -651,7 +727,7 @@ GEInt GE_STDCALL ZS_ObserveSuspect(GEInt a0, gCScriptProcessingUnit * a_pSPU)
 {
 	GEInt result = Hook_ZS_ObserveSuspect.GetOriginalFunction(&ZS_ObserveSuspect)(a0, a_pSPU);
 
-	Entity SelfEntity = Entity(a_pSPU->GetSelfEntity());
+	Entity SelfEntity(a_pSPU->GetSelfEntity());
 	Entity Player = Entity::GetPlayer();
 
 	bCString LastTask = SelfEntity.Routine.GetLastTask();
@@ -708,7 +784,7 @@ GEBool GE_STDCALL OnGuidePlayer(gCScriptProcessingUnit * a_pSPU)
 		return result;
 	}
 
-	Entity Guide = a_pSPU->GetSelfEntity();
+	Entity Guide(a_pSPU->GetSelfEntity());
 	Entity Player = Entity::GetPlayer();
 
 	gECharMovementMode PlayerMovement = Player.GetMovementMode();
@@ -784,7 +860,7 @@ GEBool GE_STDCALL OnFollowPlayer(gCScriptProcessingUnit * a_pSPU)
 		return result;
 	}
 
-	Entity Follower = Entity(a_pSPU->GetSelfEntity());
+	Entity Follower(a_pSPU->GetSelfEntity());
 	Entity Player = Entity::GetPlayer();
 
 	//gECharMovementMode PlayerMovement = Player.GetMovementMode();
@@ -920,14 +996,14 @@ GEInt IsDeadlyDamage(gCScriptProcessingUnit* a_pSPU, Entity* a_pSelfEntity, Enti
 	if (DamagerOwner.Routine.Action != gEAction_FinishingAttack && ScriptAdmin.CallScriptFromScript("IsHumanoid", &DamagerOwner, &None, 0)
 		&& ScriptAdmin.CallScriptFromScript("IsHumanoid", &Victim, &None, 0))
 	{
-		if (ScriptAdmin.CallScriptFromScript("GetAttitude", &Victim, &DamagerOwner, 0) == 4
-			|| ScriptAdmin.CallScriptFromScript("GetAttitude", &Victim, &DamagerOwner, 0) == 6)
+		if (ScriptAdmin.CallScriptFromScript("GetAttitude", &Victim, &DamagerOwner, 0) == gEAttitude::gEAttitude_Hostile
+			|| ScriptAdmin.CallScriptFromScript("GetAttitude", &Victim, &DamagerOwner, 0) == gEAttitude::gEAttitude_Panic)
 		{
 			return 1;
 		}
 
-		if (ScriptAdmin.CallScriptFromScript("GetAttitude", &DamagerOwner, &Victim, 0) == 4
-			|| ScriptAdmin.CallScriptFromScript("GetAttitude", &DamagerOwner, &Victim, 0) == 6)
+		if (ScriptAdmin.CallScriptFromScript("GetAttitude", &DamagerOwner, &Victim, 0) == gEAttitude::gEAttitude_Hostile
+			|| ScriptAdmin.CallScriptFromScript("GetAttitude", &DamagerOwner, &Victim, 0) == gEAttitude::gEAttitude_Panic)
 		{
 			return 1;
 		}
@@ -942,7 +1018,7 @@ mCFunctionHook Hook__AI_UseInventoryItem;
 GEBool GE_STDCALL _AI_UseInventoryItem(bTObjStack<gScriptRunTimeSingleState> & a_rRunTimeStack, gCScriptProcessingUnit * a_pSPU)
 {
 	Entity Player = Entity::GetPlayer();
-	Entity SelfEntity = Entity(a_pSPU->GetSelfEntity());
+	Entity SelfEntity(a_pSPU->GetSelfEntity());
 	GEU32 BreakBlock = a_rRunTimeStack.AccessAt(a_rRunTimeStack.GetCount() - 1).m_iBreakBlock;
 	gSArgsFor__AI_UseInventoryItem const * pArgs = static_cast<gSArgsFor__AI_UseInventoryItem *>(a_rRunTimeStack.Peek().m_pArguments);
 
@@ -1051,7 +1127,7 @@ void RemoveWaterfallSounds()
 
 		if (_Template->HasPropertySet("eCAudioEmitter_PS"))
 		{
-			spy.Send(bCString::GetFormattedString("%s - Removing audio emitter from: %s", PLUGIN_NAME, _Template->GetName()).GetText());
+			spy.Send(bCString::GetFormattedString("%s - Removing audio emitter from: %s", PLUGIN_NAME, _Template->GetName().GetText()).GetText());
 			_Template->RemovePropertySet("eCAudioEmitter_PS");
 		}
 	}
@@ -1059,22 +1135,30 @@ void RemoveWaterfallSounds()
 
 void RenderIcon(CFFGFCWnd* DesktopWindow)
 {
+	if (!DesktopWindow)
+		return;
+
 	if (!gCSession::GetSession().IsValid() || gCSession::GetSession().IsPaused() || !gCSession::GetSession().GetGUIManager())
 	{
 		return;
 	}
 
-	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || gCInfoManager_PS::GetInstance()->IsRunning)
+	gCInfoManager_PS * pInfoMgr = gCInfoManager_PS::GetInstance();
+	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || (pInfoMgr && pInfoMgr->GetIsRunning()))
 	{
 		return;
 	}
 
-	if (eCApplication::GetInstance().GetConsole().IsActive())
+	eCConsole * pConsole = &eCApplication::GetInstance().GetConsole();
+	if (pConsole && pConsole->IsActive())
 	{
 		return;
 	}
 
 	auto DeviceContext = DesktopWindow->GetDC();
+	if (!DeviceContext)
+		return;
+
 	bCRect ClientRect;
 	DesktopWindow->GetClientRect(ClientRect);
 
@@ -1128,7 +1212,8 @@ void RenderIcon(CFFGFCWnd* DesktopWindow)
 		GEI32 TransformationTimeTXTTopY = TopY + (TransformationIconSize / 2) - (TransformationTimeTXTRect.GetHeight() / 2);
 
 		bCRect DrawBox2(TransformationTimeTXTTopX, TransformationTimeTXTTopY, TransformationTimeTXTTopX + TransformationTimeTXTRect.GetWidth(), TransformationTimeTXTTopY + TransformationTimeTXTRect.GetHeight());
-		DeviceContext->DrawTextA(0, TransformationTimeTXT, -1, &DrawBox2, 0, bCFloatAlphaColor(bCColorBase::bEColor_White), &bCFloatAlphaColor(bCColorBase::bEColor_Black));
+		bCFloatAlphaColor shadowColor(bCColorBase::bEColor_Black);
+		DeviceContext->DrawTextA(0, TransformationTimeTXT, -1, &DrawBox2, 0, bCFloatAlphaColor(bCColorBase::bEColor_White), &shadowColor);
 	}
 }
 
@@ -1217,12 +1302,14 @@ void mCG3Fixes::Process(void)
 		return;
 	}
 
-	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || gCInfoManager_PS::GetInstance()->IsRunning)
+	gCInfoManager_PS * pInfoMgr = gCInfoManager_PS::GetInstance();
+	if (gCSession::GetInstance().GetGUIManager()->IsMenuOpen() || gCSession::GetInstance().GetGUIManager()->IsAnyPageOpen() || (pInfoMgr && pInfoMgr->GetIsRunning()))
 	{
 		return;
 	}
 
-	if (eCApplication::GetInstance().GetConsole().IsActive())
+	eCConsole * pConsole = &eCApplication::GetInstance().GetConsole();
+	if (pConsole && pConsole->IsActive())
 	{
 		return;
 	}
@@ -1351,8 +1438,8 @@ gSScriptInit const * GE_STDCALL ScriptInit(void)
 	if (CurrentAttributeRequirementFixModeSkills != AttributeRequirementFixMode::Disabled)
 	{
 		Hook_FixAttributeRequirement
-			.Prepare(RVA_Game(0xb656f), &FixAttributeRequirement, mCBaseHook::mEHookType_Mixed, mCRegisterBase::mERegisterType_Ebx)
-			.AddRegArg(mCRegisterBase::mERegisterType_Eax)
+			.Prepare(RVA_Game(0xb656f), &FixAttributeRequirement, mCBaseHook::mEHookType_Mixed, mERegisterType_Ebx)
+			.AddRegArg(mERegisterType_Eax)
 			.RestoreRegister()
 			.ReplaceSize(0x3)
 			.Hook();

@@ -1,20 +1,26 @@
-#ifndef SCRIPTG3FIXES_H_INCLUDED
-#define SCRIPTG3FIXES_H_INCLUDED
+#pragma once
 
-#include "util/Memory.h"
-#include "util/Logging.h"
-#include "util/Hook.h"
-#include "util/Util.h"
-#include "util/ScriptUtil.h"
+#include <g3sdk/Script.h>
+#include <g3sdk/util/Hook.h>
+#include <g3sdk/util/Util.h>
+#include <g3sdk/util/Logging.h>
+#include <g3sdk/util/Memory.h>
+#include <g3sdk/util/ScriptUtil.h>
 
 #include "SharedBase.h"
 #include "Script.h"
 #include "Game.h"
 
+inline GELPVoid PROC_GFC(GELPCChar a_strName) {
+	return GetProcAddress("GFC.dll", a_strName);
+}
+
+#define SCRIPT_PARAMS a_pSPU, a_pSelfEntity, a_pOtherEntity, a_iArgs
+
 gSScriptInit & GetScriptInit();
 
-#include "util/zSpy.h"
-#include "util/Random.h"
+#include "zSpy.h"
+#include "Random.h"
 
 #include <algorithm>
 
@@ -84,5 +90,3 @@ GEBool HerdUnityActive = GEFalse;
 
 AttributeRequirementFixMode CurrentAttributeRequirementFixModeSkills = AttributeRequirementFixMode::Disabled;
 AttributeRequirementFixMode CurrentAttributeRequirementFixModeEquipment = AttributeRequirementFixMode::Disabled;
-
-#endif
